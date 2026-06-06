@@ -5,5 +5,9 @@
   "scripts": {
     "start": "bun src/incidentOpsServer.ts",
     "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
   }
 }
