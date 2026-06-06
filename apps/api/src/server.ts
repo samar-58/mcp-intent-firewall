@@ -1,24 +1,24 @@
+import express from "express";
+
 const port = Number(process.env.PORT ?? 3000);
 
-const server = Bun.serve({
-  port,
-  fetch(request) {
-    const url = new URL(request.url);
+const app = express();
 
-    if (url.pathname === "/api/health") {
-      return Response.json({
-        ok: true,
-        service: "mcp-intent-firewall-api",
-      });
-    }
+app.use(express.json());
 
-    return Response.json(
-      {
-        error: "Not found",
-      },
-      { status: 404 },
-    );
-  },
+app.get("/api/health", (_request, response) => {
+  response.json({
+    ok: true,
+    service: "mcp-intent-firewall-api",
+  });
 });
 
-console.log(`API server listening on http://localhost:${server.port}`);
+app.use((_request, response) => {
+  response.status(404).json({
+    error: "Not found",
+  });
+});
+
+app.listen(port, () => {
+  console.log(`API server listening on http://localhost:${port}`);
+});

@@ -1,0 +1,137 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../apps/api/src/db/generated"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum McpTransport {
+  STDIO
+  HTTP
+}
+
+enum PolicyEffect {
+  ALLOW
+  BLOCK
+  REQUIRE_APPROVAL
+  VALIDATE
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  DENIED
+  EXPIRED
+}
+
+enum PolicyDecision {
+  ALLOW
+  BLOCK
+  REQUIRE_APPROVAL
+}
+
+enum ToolCallOutcome {
+  ALLOWED
+  BLOCKED
+  PENDING_APPROVAL
+  APPROVED
+  DENIED
+  ERROR
+}
+
+model McpServerConfig {
+  id        String       @id @default(cuid())
+  name      String       @unique
+  transport McpTransport @default(STDIO)
+  command   String
+  argsJson  Json         @default("[]")
+  envJson   Json         @default("{}")
+  enabled   Boolean      @default(true)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+}
+
+model Conversation {
+  id        String        @id @default(cuid())
+  title     String?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  messages  Message[]
+  toolCalls ToolCallLog[]
+  agentRuns AgentRunLog[]
+  approvals ApprovalRequest[]
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  role           String
+  contentJson    Json
+  createdAt      DateTime     @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+}
+
+model PolicyRule {
+  id            String       @id @default(cuid())
+  name          String
+  enabled       Boolean      @default(true)
+  effect        PolicyEffect
+  scopeJson     Json         @default("{}")
+  conditionJson Json         @default("{}")
+  priority      Int          @default(100)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
+
+model ApprovalRequest {
+  id                     String         @id @default(cuid())
+  status                 ApprovalStatus @default(PENDING)
+  conversationId         String
+  intentJson             Json
+  geminiFunctionCallJson Json
+  decisionJson           Json?
+  resultJson             Json?
+  createdAt              DateTime       @default(now())
+  resolvedAt             DateTime?
+  conversation           Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([conversationId, createdAt])
+}
+
+model ToolCallLog {
+  id                     String          @id @default(cuid())
+  conversationId         String
+  serverName             String
+  toolName               String
+  normalizedFunctionName String
+  argsJson               Json
+  intentJson             Json
+  decision               PolicyDecision
+  matchedRulesJson       Json            @default("[]")
+  outcome                ToolCallOutcome
+  resultJson             Json?
+  error                  String?
+  createdAt              DateTime        @default(now())
+  conversation           Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@index([serverName, toolName])
+  @@index([decision, outcome])
+}
+
+model AgentRunLog {
+  id             String       @id @default(cuid())
+  conversationId String
+  userMessage    String
+  finalResponse  String?
+  tokenUsageJson Json?
+  createdAt      DateTime     @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+}

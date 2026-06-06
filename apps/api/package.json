@@ -8,6 +8,12 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@mcp-intent-firewall/shared": "workspace:*"
+    "@mcp-intent-firewall/shared": "workspace:*",
+    "@prisma/adapter-pg": "^7.0.0",
+    "@prisma/client": "^7.0.0",
+    "express": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0"
   }
 }

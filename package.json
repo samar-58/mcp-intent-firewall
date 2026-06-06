@@ -7,14 +7,19 @@
     "packages/*"
   ],
   "scripts": {
+    "postinstall": "prisma generate",
     "dev": "bun --filter api dev",
     "dev:api": "bun --filter api dev",
     "dev:web": "bun --filter web dev",
     "custom:mcp": "bun --filter custom-mcp start",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
     "typecheck": "bun --filter '*' typecheck"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "prisma": "^7.0.0",
     "typescript": "^5"
   }
 }

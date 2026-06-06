@@ -6,6 +6,7 @@
     "moduleDetection": "force",
     "jsx": "react-jsx",
     "moduleResolution": "bundler",
+    "esModuleInterop": true,
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,

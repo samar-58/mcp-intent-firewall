@@ -5,6 +5,7 @@ node_modules
 out
 dist
 *.tgz
+apps/api/src/db/generated
 
 # code coverage
 coverage
