@@ -1,12 +1,20 @@
 {
   "name": "mcp-intent-firewall",
-  "module": "index.ts",
   "type": "module",
   "private": true,
-  "devDependencies": {
-    "@types/bun": "latest"
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bun --filter api dev",
+    "dev:api": "bun --filter api dev",
+    "dev:web": "bun --filter web dev",
+    "custom:mcp": "bun --filter custom-mcp start",
+    "typecheck": "bun --filter '*' typecheck"
   },
-  "peerDependencies": {
+  "devDependencies": {
+    "@types/bun": "latest",
     "typescript": "^5"
   }
 }

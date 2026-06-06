@@ -1,0 +1,9 @@
+{
+  "name": "custom-mcp",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "bun src/incidentOpsServer.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}
