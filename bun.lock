@@ -5,6 +5,7 @@
       "name": "mcp-intent-firewall",
       "devDependencies": {
         "@types/bun": "latest",
+        "dotenv": "^17.4.2",
         "prisma": "^7.0.0",
         "typescript": "^5",
       },
