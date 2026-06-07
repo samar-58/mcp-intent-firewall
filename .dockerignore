@@ -1,0 +1,9 @@
+.env
+.git
+.turbo
+apps/web/dist
+node_modules
+**/node_modules
+Dockerfile
+npm-debug.log
+bun-error.log

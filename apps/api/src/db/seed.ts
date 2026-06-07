@@ -1,9 +1,14 @@
 import type { PolicyRuleDefinition } from "@mcp-intent-firewall/shared";
 import { prisma } from "./prisma";
 
-const context7Args = process.env.CONTEXT7_API_KEY
-  ? ["-y", "@upstash/context7-mcp", "--api-key", process.env.CONTEXT7_API_KEY]
-  : ["-y", "@upstash/context7-mcp"];
+const context7Env = process.env.CONTEXT7_API_KEY
+  ? { CONTEXT7_API_KEY: process.env.CONTEXT7_API_KEY }
+  : {};
+const context7Args = [
+  "node_modules/@upstash/context7-mcp/dist/index.js",
+  "--transport",
+  "stdio",
+];
 
 const policyRules: PolicyRuleDefinition[] = [
   {
@@ -76,47 +81,41 @@ await prisma.mcpServerConfig.upsert({
   where: { name: "context7" },
   update: {
     transport: "STDIO",
-    command: "npx",
+    command: "bun",
     argsJson: context7Args,
-    envJson: process.env.CONTEXT7_API_KEY
-      ? { CONTEXT7_API_KEY: process.env.CONTEXT7_API_KEY }
-      : {},
-    enabled: Boolean(process.env.CONTEXT7_API_KEY),
+    envJson: context7Env,
+    enabled: true,
   },
   create: {
     id: "context7",
     name: "context7",
     transport: "STDIO",
-    command: "npx",
+    command: "bun",
     argsJson: context7Args,
-    envJson: process.env.CONTEXT7_API_KEY
-      ? { CONTEXT7_API_KEY: process.env.CONTEXT7_API_KEY }
-      : {},
-    enabled: Boolean(process.env.CONTEXT7_API_KEY),
+    envJson: context7Env,
+    enabled: true,
   },
 });
 
 for (const rule of policyRules) {
-  await prisma.policyRule.upsert({
+  const existing = await prisma.policyRule.findUnique({
     where: { id: rule.id },
-    update: {
-      name: rule.name,
-      enabled: rule.enabled,
-      effect: rule.effect,
-      scopeJson: rule.scope,
-      conditionJson: rule.condition,
-      priority: rule.priority,
-    },
-    create: {
-      id: rule.id,
-      name: rule.name,
-      enabled: rule.enabled,
-      effect: rule.effect,
-      scopeJson: rule.scope,
-      conditionJson: rule.condition,
-      priority: rule.priority,
-    },
+    select: { id: true },
   });
+
+  if (!existing) {
+    await prisma.policyRule.create({
+      data: {
+        id: rule.id,
+        name: rule.name,
+        enabled: rule.enabled,
+        effect: rule.effect,
+        scopeJson: rule.scope,
+        conditionJson: rule.condition,
+        priority: rule.priority,
+      },
+    });
+  }
 }
 
 console.log("Seeded MCP servers and default policy rules.");

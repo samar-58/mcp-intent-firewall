@@ -27,9 +27,6 @@ Create `.env`:
 DATABASE_URL="postgresql://..."
 GEMINI_API_KEY="..."
 GEMINI_MODEL="gemini-2.5-flash"
-
-# Optional. If present, seed enables Context7.
-CONTEXT7_API_KEY="..."
 ```
 
 Run DB setup:
@@ -51,6 +48,30 @@ Open the dashboard at:
 ```txt
 http://localhost:5173
 ```
+
+## Railway Deploy
+
+Use the included `Dockerfile` for an all-in-one Railway service. The container
+builds the Vite dashboard and serves it from the Express API, so the deployed
+app has one origin for the UI, API, and SSE stream.
+
+Set these Railway environment variables:
+
+```bash
+DATABASE_URL="postgresql://..."
+GEMINI_API_KEY="..."
+GEMINI_MODEL="gemini-2.5-flash"
+NODE_ENV="production"
+```
+
+The Docker start command runs migrations and starts the API:
+
+```bash
+bun run prisma:deploy && bun --filter api start
+```
+
+Run `bun run seed` only once against the production database when you first
+create it. Do not run seed on every deploy or restart.
 
 ## Demo Flow
 

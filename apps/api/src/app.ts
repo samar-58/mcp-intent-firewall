@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import express from "express";
 import { GeminiAgent } from "./agent";
 import { McpRegistry } from "./mcp";
@@ -150,61 +153,71 @@ export async function createApiApp() {
   });
 
   app.post("/api/approvals/:id/approve", async (request, response) => {
-    const approval = await getApprovalRequest(request.params.id);
+    try {
+      const approval = await getApprovalRequest(request.params.id);
 
-    if (!approval || approval.status !== "PENDING") {
-      response.status(404).json({ error: "Pending approval not found" });
-      return;
-    }
+      if (!approval || approval.status !== "PENDING") {
+        response.status(404).json({ error: "Pending approval not found" });
+        return;
+      }
 
-    if (!process.env.GEMINI_API_KEY) {
-      response.status(503).json({
-        error: "GEMINI_API_KEY is required to resume the approved agent run",
+      if (!process.env.GEMINI_API_KEY) {
+        response.status(503).json({
+          error: "GEMINI_API_KEY is required to resume the approved agent run",
+        });
+        return;
+      }
+
+      const functionCall = approval.geminiFunctionCallJson as any;
+      const intent = approval.intentJson as any;
+      const decision = approval.decisionJson as any;
+      const contents = Array.isArray(approval.agentContentsJson)
+        ? (approval.agentContentsJson as any[])
+        : [];
+
+      if (contents.length === 0) {
+        response.status(409).json({
+          error: "Approval is missing saved agent state and cannot be resumed",
+        });
+        return;
+      }
+
+      const result = await registry.callTool(
+        functionCall.name,
+        functionCall.args ?? {},
+      );
+      const updated = await approveRequest(approval.id, result);
+      const agent = new GeminiAgent({ registry });
+      const resumed = await agent.resumeAfterApproval({
+        conversationId: approval.conversationId,
+        userMessage: intent.userMessage ?? "Resumed after human approval",
+        contents,
+        functionCall,
+        approvedResult: result,
+        decision,
+        policyRules: [],
+        loadPolicyRules: async () => policyCache.active(),
       });
-      return;
-    }
 
-    const functionCall = approval.geminiFunctionCallJson as any;
-    const intent = approval.intentJson as any;
-    const decision = approval.decisionJson as any;
-    const contents = Array.isArray(approval.agentContentsJson)
-      ? (approval.agentContentsJson as any[])
-      : [];
-
-    if (contents.length === 0) {
-      response.status(409).json({
-        error: "Approval is missing saved agent state and cannot be resumed",
+      await saveApprovalResume({
+        conversationId: approval.conversationId,
+        result: resumed,
       });
-      return;
+
+      publishEvent("approval.updated", { approval: updated });
+      publishEvent("tool_call.logged", { approval: updated, result });
+      for (const toolEvent of resumed.toolEvents) {
+        publishEvent("tool_call.logged", toolEvent);
+      }
+      publishEvent("conversation.updated", {
+        conversationId: approval.conversationId,
+        finalResponse: resumed.finalResponse,
+      });
+
+      response.json({ approval: updated, result, resumed });
+    } catch (error) {
+      sendAgentError(response, error);
     }
-
-    const result = await registry.callTool(
-      functionCall.name,
-      functionCall.args ?? {},
-    );
-    const updated = await approveRequest(approval.id, result);
-    const agent = new GeminiAgent({ registry });
-    const resumed = await agent.resumeAfterApproval({
-      conversationId: approval.conversationId,
-      userMessage: intent.userMessage ?? "Resumed after human approval",
-      contents,
-      functionCall,
-      approvedResult: result,
-      decision,
-      policyRules: [],
-      loadPolicyRules: async () => policyCache.active(),
-    });
-
-    await saveApprovalResume({
-      conversationId: approval.conversationId,
-      result: resumed,
-    });
-
-    publishEvent("approval.updated", { approval: updated });
-    publishEvent("tool_call.logged", { approval: updated, result });
-    publishEvent("conversation.updated", { conversationId: approval.conversationId });
-
-    response.json({ approval: updated, result, resumed });
   });
 
   app.post("/api/approvals/:id/deny", async (request, response) => {
@@ -238,35 +251,113 @@ export async function createApiApp() {
       return;
     }
 
-    const conversationId = request.body?.conversationId ?? crypto.randomUUID();
-    const agent = new GeminiAgent({ registry });
-    const result = await agent.run({
-      conversationId,
-      userMessage: message,
-      policyRules: [],
-      loadPolicyRules: async () => policyCache.active(),
-    });
+    try {
+      const conversationId = request.body?.conversationId ?? crypto.randomUUID();
+      const agent = new GeminiAgent({ registry });
+      const result = await agent.run({
+        conversationId,
+        userMessage: message,
+        policyRules: [],
+        loadPolicyRules: async () => policyCache.active(),
+      });
 
-    for (const toolEvent of result.toolEvents) {
-      publishEvent("tool_call.logged", toolEvent);
+      for (const toolEvent of result.toolEvents) {
+        publishEvent("tool_call.logged", toolEvent);
+      }
+
+      await saveAgentRun({ conversationId, userMessage: message, result });
+
+      response.json({
+        conversationId,
+        status: result.status,
+        message: result.finalResponse,
+        toolEvents: result.toolEvents,
+        tokenUsage: result.tokenUsage,
+      });
+    } catch (error) {
+      sendAgentError(response, error);
     }
-
-    await saveAgentRun({ conversationId, userMessage: message, result });
-
-    response.json({
-      conversationId,
-      status: result.status,
-      message: result.finalResponse,
-      toolEvents: result.toolEvents,
-      tokenUsage: result.tokenUsage,
-    });
   });
 
-  app.use((_request, response) => {
+  app.use("/api", (_request, response) => {
     response.status(404).json({
       error: "Not found",
     });
   });
 
+  if (shouldServeWeb()) {
+    const distPath = webDistPath();
+
+    if (existsSync(distPath)) {
+      app.use(express.static(distPath));
+      app.get(/.*/, (_request, response) => {
+        response.sendFile(path.join(distPath, "index.html"));
+      });
+    }
+  }
+
   return { app, registry };
+}
+
+function shouldServeWeb() {
+  return process.env.NODE_ENV === "production" || process.env.SERVE_WEB === "true";
+}
+
+function webDistPath() {
+  const currentFile = fileURLToPath(import.meta.url);
+  const currentDir = path.dirname(currentFile);
+
+  return path.resolve(currentDir, "../../web/dist");
+}
+
+function sendAgentError(response: express.Response, error: unknown) {
+  const normalized = normalizeAgentError(error);
+
+  response.status(normalized.status).json(normalized.body);
+}
+
+function normalizeAgentError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  const retryAfterSeconds = retryDelaySeconds(message);
+
+  if (message.includes('"code":429') || message.includes("RESOURCE_EXHAUSTED")) {
+    return {
+      status: 429,
+      body: {
+        error: retryAfterSeconds
+          ? `Gemini quota exceeded. Please retry in about ${retryAfterSeconds} seconds.`
+          : "Gemini quota exceeded. Please retry later.",
+        code: "GEMINI_RATE_LIMITED",
+        retryAfterSeconds,
+      },
+    };
+  }
+
+  if (message.includes('"code":404') && message.includes("models/")) {
+    return {
+      status: 502,
+      body: {
+        error:
+          "Configured Gemini model is not available for generateContent. Set GEMINI_MODEL to an available model, for example gemini-2.5-flash.",
+        code: "GEMINI_MODEL_NOT_FOUND",
+      },
+    };
+  }
+
+  return {
+    status: 500,
+    body: {
+      error: "Agent run failed. Check the API logs for details.",
+      code: "AGENT_RUN_FAILED",
+      detail: message,
+    },
+  };
+}
+
+function retryDelaySeconds(message: string) {
+  const retryInfoMatch = message.match(/"retryDelay":"(\d+)s"/);
+  const textMatch = message.match(/retry in ([\d.]+)s/i);
+  const seconds = retryInfoMatch?.[1] ?? textMatch?.[1];
+
+  return seconds ? Math.ceil(Number(seconds)) : undefined;
 }

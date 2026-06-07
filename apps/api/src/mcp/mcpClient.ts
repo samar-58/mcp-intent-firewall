@@ -11,6 +11,7 @@ type TimeoutOptions = {
 export class McpClientConnection {
   private client?: Client;
   private transport?: StdioClientTransport;
+  private stderrBuffer = "";
 
   constructor(private readonly definition: McpServerDefinition) {}
 
@@ -35,12 +36,24 @@ export class McpClientConnection {
       env: this.definition.env,
       stderr: "pipe",
     });
+    this.transport.stderr?.on("data", (chunk: Buffer) => {
+      this.stderrBuffer = `${this.stderrBuffer}${chunk.toString()}`.slice(-2000);
+    });
 
-    await this.client.connect(this.transport);
+    try {
+      await this.client.connect(this.transport);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const stderr = this.stderrBuffer.trim();
+
+      throw new Error(stderr ? `${message}: ${stderr}` : message);
+    }
   }
 
   async listTools() {
-    return this.withConnectedClient((client) => client.listTools());
+    return this.withStderrContext(
+      this.withConnectedClient((client) => client.listTools()),
+    );
   }
 
   async callTool(
@@ -48,14 +61,16 @@ export class McpClientConnection {
     args: Record<string, unknown>,
     options: TimeoutOptions = {},
   ) {
-    return this.withTimeout(
-      this.withConnectedClient((client) =>
-        client.callTool({
-          name: toolName,
-          arguments: args,
-        }),
+    return this.withStderrContext(
+      this.withTimeout(
+        this.withConnectedClient((client) =>
+          client.callTool({
+            name: toolName,
+            arguments: args,
+          }),
+        ),
+        options.timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS,
       ),
-      options.timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS,
     );
   }
 
@@ -92,6 +107,17 @@ export class McpClientConnection {
       if (timeout) {
         clearTimeout(timeout);
       }
+    }
+  }
+
+  private async withStderrContext<T>(promise: Promise<T>) {
+    try {
+      return await promise;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const stderr = this.stderrBuffer.trim();
+
+      throw new Error(stderr ? `${message}: ${stderr}` : message);
     }
   }
 }
