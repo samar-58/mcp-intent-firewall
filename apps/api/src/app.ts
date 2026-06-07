@@ -1,22 +1,23 @@
 import express from "express";
-import { fileURLToPath } from "node:url";
-import type {
-  McpServerDefinition,
-  PolicyRuleDefinition,
-} from "@mcp-intent-firewall/shared";
 import { GeminiAgent } from "./agent";
 import { McpRegistry } from "./mcp";
+import {
+  listConversations,
+  listToolCallLogs,
+  loadMcpServers,
+  loadPolicyRules,
+  saveAgentRun,
+  updatePolicyRule,
+} from "./db/controlPlaneStore";
 import { addSseClient, publishEvent } from "./realtime/eventBus";
 
 export async function createApiApp() {
   const app = express();
   const registry = new McpRegistry();
-  const mcpServers = defaultMcpServers();
-  const policyRules = defaultPolicyRules();
 
   app.use(express.json());
 
-  await registry.refresh(mcpServers);
+  await registry.refresh(await loadMcpServers());
 
   app.get("/api/health", (_request, response) => {
     response.json({
@@ -35,9 +36,9 @@ export async function createApiApp() {
     request.on("close", cleanup);
   });
 
-  app.get("/api/mcp/servers", (_request, response) => {
+  app.get("/api/mcp/servers", async (_request, response) => {
     response.json({
-      servers: mcpServers,
+      servers: await loadMcpServers(),
       health: registry.getHealth(),
     });
   });
@@ -49,7 +50,7 @@ export async function createApiApp() {
   });
 
   app.post("/api/mcp/refresh", async (_request, response) => {
-    await registry.refresh(mcpServers);
+    await registry.refresh(await loadMcpServers());
 
     const payload = {
       health: registry.getHealth(),
@@ -60,22 +61,29 @@ export async function createApiApp() {
     response.json(payload);
   });
 
-  app.get("/api/policies", (_request, response) => {
-    response.json({ policies: policyRules });
+  app.get("/api/policies", async (_request, response) => {
+    response.json({
+      policies: await loadPolicyRules(),
+    });
   });
 
-  app.patch("/api/policies/:id", (request, response) => {
-    const policy = policyRules.find((rule) => rule.id === request.params.id);
+  app.patch("/api/policies/:id", async (request, response) => {
+    try {
+      const policy = await updatePolicyRule(request.params.id, request.body);
 
-    if (!policy) {
+      publishEvent("policy.updated", { policy });
+      response.json({ policy });
+    } catch {
       response.status(404).json({ error: "Policy not found" });
-      return;
     }
+  });
 
-    Object.assign(policy, request.body, { id: policy.id });
-    publishEvent("policy.updated", { policy });
+  app.get("/api/conversations", async (_request, response) => {
+    response.json({ conversations: await listConversations() });
+  });
 
-    response.json({ policy });
+  app.get("/api/logs/tool-calls", async (_request, response) => {
+    response.json({ logs: await listToolCallLogs() });
   });
 
   app.post("/api/chat", async (request, response) => {
@@ -95,6 +103,7 @@ export async function createApiApp() {
 
     const conversationId = request.body?.conversationId ?? crypto.randomUUID();
     const agent = new GeminiAgent({ registry });
+    const policyRules = await loadPolicyRules();
     const result = await agent.run({
       conversationId,
       userMessage: message,
@@ -104,6 +113,8 @@ export async function createApiApp() {
     for (const toolEvent of result.toolEvents) {
       publishEvent("tool_call.logged", toolEvent);
     }
+
+    await saveAgentRun({ conversationId, userMessage: message, result });
 
     response.json({
       conversationId,
@@ -120,46 +131,5 @@ export async function createApiApp() {
     });
   });
 
-  return { app, registry, mcpServers, policyRules };
-}
-
-function defaultMcpServers(): McpServerDefinition[] {
-  return [
-    {
-      id: "incidentops-local",
-      name: "incidentops",
-      transport: "STDIO",
-      command: "bun",
-      args: ["packages/custom-mcp/src/incidentOpsServer.ts"],
-      cwd: repoRoot(),
-      enabled: true,
-    },
-  ];
-}
-
-function defaultPolicyRules(): PolicyRuleDefinition[] {
-  return [
-    {
-      id: "rule_page_on_call_approval",
-      name: "Require approval before paging on-call",
-      enabled: true,
-      effect: "REQUIRE_APPROVAL",
-      scope: { toolName: "page_on_call" },
-      condition: { kind: "always" },
-      priority: 20,
-    },
-    {
-      id: "rule_block_close_incident",
-      name: "Block model from closing incidents",
-      enabled: true,
-      effect: "BLOCK",
-      scope: { toolName: "update_incident_status" },
-      condition: { kind: "argsEquals", path: "status", value: "closed" },
-      priority: 10,
-    },
-  ];
-}
-
-function repoRoot() {
-  return fileURLToPath(new URL("../../../", import.meta.url));
+  return { app, registry };
 }

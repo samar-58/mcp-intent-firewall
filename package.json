@@ -15,6 +15,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
+    "seed": "bun apps/api/src/db/seed.ts",
     "test": "bun test",
     "typecheck": "bun --filter '*' typecheck"
   },

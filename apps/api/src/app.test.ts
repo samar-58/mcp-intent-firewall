@@ -60,8 +60,15 @@ describe("API routes", () => {
   });
 
   test("updates policies without restart", async () => {
+    const policyId = "rule_page_on_call_approval";
+    const beforeResponse = await fetch(`${baseUrl}/api/policies`);
+    const beforeBody = await beforeResponse.json();
+    const before = beforeBody.policies.find(
+      (policy: { id: string }) => policy.id === policyId,
+    );
+
     const response = await fetch(
-      `${baseUrl}/api/policies/rule_page_on_call_approval`,
+      `${baseUrl}/api/policies/${policyId}`,
       {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -80,6 +87,12 @@ describe("API routes", () => {
     );
 
     expect(updated.enabled).toBe(false);
+
+    await fetch(`${baseUrl}/api/policies/${policyId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: before.enabled }),
+    });
   });
 
   test("chat reports missing Gemini key instead of pretending to run", async () => {
