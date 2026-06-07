@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@mcp-intent-firewall/shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@prisma/adapter-pg": "^7.0.0",
     "@prisma/client": "^7.0.0",
     "express": "^5.0.0"
