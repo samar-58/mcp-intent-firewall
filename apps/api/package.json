@@ -8,6 +8,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@google/genai": "^2.8.0",
     "@mcp-intent-firewall/shared": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@prisma/adapter-pg": "^7.0.0",
