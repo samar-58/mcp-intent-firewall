@@ -1,5 +1,14 @@
 export type {
   DiscoveredMcpTool,
+  IntentActor,
+  JsonPrimitive,
+  JsonValue,
+  MatchedPolicyRule,
+  PolicyCondition,
+  PolicyDecision,
+  PolicyEffect,
+  PolicyRuleDefinition,
+  PolicyScope,
   McpServerDefinition,
   McpServerHealth,
   McpServerStatus,
@@ -7,4 +16,5 @@ export type {
   McpTransport,
   PlaceholderStatus,
   ServiceStatus,
+  ToolIntent,
 } from "./types";

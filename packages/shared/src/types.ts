@@ -49,3 +49,75 @@ export type McpToolCallResult = {
   normalizedName: string;
   result: unknown;
 };
+
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+
+export type IntentActor = "llm-agent";
+
+export type ToolIntent = {
+  id: string;
+  conversationId: string;
+  actor: IntentActor;
+  serverId: string;
+  serverName: string;
+  toolName: string;
+  normalizedFunctionName: string;
+  args: Record<string, unknown>;
+  userMessage: string;
+  riskTags: string[];
+  createdAt: string;
+};
+
+export type PolicyEffect = "ALLOW" | "BLOCK" | "REQUIRE_APPROVAL" | "VALIDATE";
+
+export type PolicyScope = {
+  serverId?: string;
+  serverName?: string;
+  toolName?: string;
+  normalizedFunctionName?: string;
+};
+
+export type PolicyCondition =
+  | { kind: "always" }
+  | { kind: "argsEquals"; path: string; value: JsonValue }
+  | { kind: "argsNotEquals"; path: string; value: JsonValue }
+  | { kind: "argsIn"; path: string; values: JsonValue[] }
+  | { kind: "argStringStartsWith"; path: string; prefix: string }
+  | { kind: "all"; conditions: PolicyCondition[] }
+  | { kind: "any"; conditions: PolicyCondition[] };
+
+export type PolicyRuleDefinition = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  effect: PolicyEffect;
+  scope: PolicyScope;
+  condition: PolicyCondition;
+  priority: number;
+};
+
+export type MatchedPolicyRule = {
+  id: string;
+  name: string;
+  effect: PolicyEffect;
+  priority: number;
+  reason: string;
+};
+
+export type PolicyDecision =
+  | {
+      outcome: "ALLOW";
+      matchedRules: MatchedPolicyRule[];
+      reason: string;
+    }
+  | {
+      outcome: "BLOCK";
+      matchedRules: MatchedPolicyRule[];
+      reason: string;
+    }
+  | {
+      outcome: "REQUIRE_APPROVAL";
+      matchedRules: MatchedPolicyRule[];
+      reason: string;
+    };
