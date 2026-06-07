@@ -33,7 +33,19 @@ export type AgentRunInput = {
   conversationId: string;
   userMessage: string;
   policyRules: PolicyRuleDefinition[];
+  loadPolicyRules?: () => Promise<PolicyRuleDefinition[]>;
   history?: Content[];
+};
+
+export type AgentResumeInput = {
+  conversationId: string;
+  userMessage: string;
+  contents: Content[];
+  functionCall: FunctionCall;
+  approvedResult: McpToolCallResult;
+  decision: PolicyDecision;
+  policyRules: PolicyRuleDefinition[];
+  loadPolicyRules?: () => Promise<PolicyRuleDefinition[]>;
 };
 
 export type AgentToolEvent =
@@ -118,7 +130,52 @@ export class GeminiAgent {
         parts: [{ text: input.userMessage }],
       },
     ];
+
+    return this.continueLoop(input, contents);
+  }
+
+  async resumeAfterApproval(input: AgentResumeInput): Promise<AgentRunResult> {
     const toolEvents: AgentToolEvent[] = [];
+    const contents = withoutPendingApprovalResponse(input.contents);
+
+    toolEvents.push({
+      kind: "allowed",
+      intent: {
+        id: crypto.randomUUID(),
+        conversationId: input.conversationId,
+        actor: "llm-agent",
+        serverId: input.approvedResult.serverId,
+        serverName: input.approvedResult.serverName,
+        toolName: input.approvedResult.toolName,
+        normalizedFunctionName: input.approvedResult.normalizedName,
+        args: input.functionCall.args ?? {},
+        userMessage: input.userMessage,
+        riskTags: [],
+        createdAt: new Date().toISOString(),
+      },
+      decision: input.decision,
+      result: input.approvedResult,
+    });
+
+    contents.push({
+      role: "user",
+      parts: [
+        functionResponsePart(input.functionCall, {
+          output: input.approvedResult.result,
+          decision: input.decision,
+          approved: true,
+        }),
+      ],
+    });
+
+    return this.continueLoop(input, contents, toolEvents);
+  }
+
+  private async continueLoop(
+    input: AgentRunInput | AgentResumeInput,
+    contents: Content[],
+    toolEvents: AgentToolEvent[] = [],
+  ): Promise<AgentRunResult> {
     let tokenUsage: GenerateContentResponseUsageMetadata | undefined;
 
     for (let iteration = 0; iteration < this.maxToolIterations; iteration += 1) {
@@ -238,7 +295,10 @@ export class GeminiAgent {
       normalizedFunctionName: route.normalizedName,
       args,
     });
-    const decision = this.policyEngine.evaluate(intent, input.policyRules);
+    const policyRules = input.loadPolicyRules
+      ? await input.loadPolicyRules()
+      : input.policyRules;
+    const decision = this.policyEngine.evaluate(intent, policyRules);
 
     if (decision.outcome === "BLOCK") {
       toolEvents.push({ kind: "blocked", intent, decision });
@@ -306,4 +366,18 @@ function functionResponsePart(
       response,
     },
   };
+}
+
+function withoutPendingApprovalResponse(contents: Content[]) {
+  const copied = [...contents];
+  const last = copied.at(-1);
+
+  if (
+    last?.role === "user" &&
+    last.parts?.some((part) => part.functionResponse)
+  ) {
+    copied.pop();
+  }
+
+  return copied;
 }

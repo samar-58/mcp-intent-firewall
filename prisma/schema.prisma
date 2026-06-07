@@ -93,6 +93,7 @@ model ApprovalRequest {
   conversationId         String
   intentJson             Json
   geminiFunctionCallJson Json
+  agentContentsJson      Json?
   decisionJson           Json?
   resultJson             Json?
   createdAt              DateTime       @default(now())

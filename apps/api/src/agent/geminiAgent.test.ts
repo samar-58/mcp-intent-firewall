@@ -4,7 +4,11 @@ import type {
   GenerateContentParameters,
   GenerateContentResponse,
 } from "@google/genai";
-import type { PolicyRuleDefinition } from "@mcp-intent-firewall/shared";
+import type {
+  McpToolCallResult,
+  PolicyDecision,
+  PolicyRuleDefinition,
+} from "@mcp-intent-firewall/shared";
 import { McpRegistry } from "../mcp/mcpRegistry";
 import { GeminiAgent, type GeminiContentGenerator } from "./geminiAgent";
 
@@ -163,5 +167,84 @@ describe("GeminiAgent", () => {
     expect(result.status).toBe("completed");
     expect(result.toolEvents[0]?.kind).toBe("blocked");
     expect(toolResponse?.error).toBe("Blocked by external policy engine");
+  });
+
+  test("resumes the Gemini loop after a human approves a tool call", async () => {
+    const generateContentCalls: GenerateContentParameters[] = [];
+    const generateContent: GeminiContentGenerator = async (params) => {
+      generateContentCalls.push(params);
+
+      return fakeResponse({
+        text: "The on-call engineer has been paged.",
+      });
+    };
+    const agent = new GeminiAgent({
+      registry,
+      generateContent,
+      model: "test-model",
+    });
+    const decision: PolicyDecision = {
+      outcome: "REQUIRE_APPROVAL",
+      reason: "Human approval required for paging.",
+      matchedRules: [],
+    };
+    const approvedResult: McpToolCallResult = {
+      serverId: "incidentops-local",
+      serverName: "incidentops",
+      toolName: "page_on_call",
+      normalizedName: "incidentops__page_on_call",
+      result: { status: "queued" },
+    };
+
+    const result = await agent.resumeAfterApproval({
+      conversationId: "conv_3",
+      userMessage: "Page SRE.",
+      contents: [
+        { role: "user", parts: [{ text: "Page SRE." }] },
+        {
+          role: "model",
+          parts: [
+            {
+              functionCall: {
+                id: "call_3",
+                name: "incidentops__page_on_call",
+                args: { team: "sre", incidentId: "inc_checkout_001" },
+              },
+            },
+          ],
+        },
+        {
+          role: "user",
+          parts: [
+            {
+              functionResponse: {
+                id: "call_3",
+                name: "incidentops__page_on_call",
+                response: { error: "Human approval required before execution" },
+              },
+            },
+          ],
+        },
+      ],
+      functionCall: {
+        id: "call_3",
+        name: "incidentops__page_on_call",
+        args: { team: "sre", incidentId: "inc_checkout_001" },
+      },
+      approvedResult,
+      decision,
+      policyRules: [],
+    });
+
+    const approvedToolResponse = functionResponses(generateContentCalls[0]!)[0];
+
+    expect(result.status).toBe("completed");
+    expect(result.finalResponse).toBe("The on-call engineer has been paged.");
+    expect(result.toolEvents[0]?.kind).toBe("allowed");
+    if (!approvedToolResponse?.response) {
+      throw new Error("Expected an approved tool response");
+    }
+    expect(approvedToolResponse.response.approved).toBe(true);
+    expect(approvedToolResponse.response.output).toEqual({ status: "queued" });
   });
 });

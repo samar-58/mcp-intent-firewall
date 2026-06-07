@@ -16,7 +16,8 @@ body {
 
 button,
 textarea,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -130,6 +131,15 @@ textarea {
   background: #fbfdfb;
 }
 
+input,
+select {
+  min-height: 36px;
+  border: 1px solid #c8d5cc;
+  border-radius: 6px;
+  padding: 0 10px;
+  background: #fbfdfb;
+}
+
 .response {
   padding: 12px;
   border-radius: 6px;
@@ -154,6 +164,24 @@ textarea {
 
 .policyRow {
   justify-content: flex-start;
+}
+
+.createRule,
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.createRule {
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 12px 0;
+  border-top: 1px solid #edf2ee;
+}
+
+.muted {
+  margin-top: 12px;
+  color: #65746b;
 }
 
 .pill {
