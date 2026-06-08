@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Server } from "node:http";
-import { createApiApp } from "./app";
+import { createApiApp, normalizeAgentError } from "./app";
 import type { McpRegistry } from "./mcp";
 
 let server: Server;
@@ -95,9 +95,11 @@ describe("API routes", () => {
     });
   });
 
-  test("chat reports missing Gemini key instead of pretending to run", async () => {
-    const originalKey = process.env.GEMINI_API_KEY;
-    delete process.env.GEMINI_API_KEY;
+  test("chat reports missing AI Gateway key instead of pretending to run", async () => {
+    const originalKey = process.env.AI_GATEWAY_API_KEY;
+    const originalOidc = process.env.VERCEL_OIDC_TOKEN;
+    delete process.env.AI_GATEWAY_API_KEY;
+    delete process.env.VERCEL_OIDC_TOKEN;
 
     const response = await fetch(`${baseUrl}/api/chat`, {
       method: "POST",
@@ -106,9 +108,34 @@ describe("API routes", () => {
     });
     const body = await response.json();
 
-    process.env.GEMINI_API_KEY = originalKey;
+    process.env.AI_GATEWAY_API_KEY = originalKey;
+    process.env.VERCEL_OIDC_TOKEN = originalOidc;
 
     expect(response.status).toBe(503);
-    expect(body.error).toBe("GEMINI_API_KEY is required for live chat");
+    expect(body.error).toBe("AI_GATEWAY_API_KEY is required for live chat");
+  });
+});
+
+describe("agent error normalization", () => {
+  test("reports AI Gateway billing setup errors clearly", () => {
+    const normalized = normalizeAgentError(
+      new Error(
+        "AI Gateway requires a valid credit card on file to service requests.",
+      ),
+    );
+
+    expect(normalized.status).toBe(402);
+    expect(normalized.body.code).toBe("AI_GATEWAY_BILLING_REQUIRED");
+  });
+
+  test("reports AI Gateway free-tier model rate limits clearly", () => {
+    const normalized = normalizeAgentError(
+      new Error(
+        "Failed after 3 attempts. Last error: Free tier requests on this model are rate-limited.",
+      ),
+    );
+
+    expect(normalized.status).toBe(429);
+    expect(normalized.body.code).toBe("AI_GATEWAY_RATE_LIMITED");
   });
 });

@@ -1,13 +1,11 @@
 import {
-  FunctionCallingConfigMode,
-  GoogleGenAI,
-  type Content,
-  type FunctionCall,
-  type GenerateContentParameters,
-  type GenerateContentResponse,
-  type GenerateContentResponseUsageMetadata,
-  type Part,
-} from "@google/genai";
+  generateText,
+  type LanguageModelUsage,
+  type ModelMessage,
+  type ToolCallPart,
+  type ToolResultPart,
+  type ToolSet,
+} from "ai";
 import type {
   McpToolCallResult,
   PolicyDecision,
@@ -17,9 +15,9 @@ import type {
 import type { McpRegistry } from "../mcp/mcpRegistry";
 import { PolicyEngine } from "../policy/policyEngine";
 import { normalizeToolIntent } from "../policy/intentNormalizer";
-import { toGeminiFunctionDeclarations } from "./toolSchemaAdapter";
+import { toAiSdkTools } from "./toolSchemaAdapter";
 
-const DEFAULT_MODEL = "gemini-2.5-flash";
+const DEFAULT_MODEL = "anthropic/claude-sonnet-4.6";
 const DEFAULT_MAX_TOOL_ITERATIONS = 5;
 
 const SYSTEM_INSTRUCTION = [
@@ -30,19 +28,25 @@ const SYSTEM_INSTRUCTION = [
   "If a tool response includes approved: true, explain that human approval was granted and summarize the executed result.",
 ].join("\n");
 
+export type AgentToolCall = {
+  toolCallId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+};
+
 export type AgentRunInput = {
   conversationId: string;
   userMessage: string;
   policyRules: PolicyRuleDefinition[];
   loadPolicyRules?: () => Promise<PolicyRuleDefinition[]>;
-  history?: Content[];
+  history?: ModelMessage[];
 };
 
 export type AgentResumeInput = {
   conversationId: string;
   userMessage: string;
-  contents: Content[];
-  functionCall: FunctionCall;
+  contents: ModelMessage[];
+  functionCall: AgentToolCall;
   approvedResult: McpToolCallResult;
   decision: PolicyDecision;
   policyRules: PolicyRuleDefinition[];
@@ -65,6 +69,7 @@ export type AgentToolEvent =
       kind: "approval_required";
       intent: ToolIntent;
       decision: PolicyDecision;
+      functionCall: AgentToolCall;
     }
   | {
       kind: "error";
@@ -76,60 +81,69 @@ export type AgentRunResult = {
   conversationId: string;
   status: "completed" | "pending_approval";
   finalResponse: string;
-  contents: Content[];
+  contents: ModelMessage[];
   toolEvents: AgentToolEvent[];
-  tokenUsage?: GenerateContentResponseUsageMetadata;
+  tokenUsage?: LanguageModelUsage;
 };
 
-export type GeminiContentGenerator = (
-  params: GenerateContentParameters,
-) => Promise<GenerateContentResponse>;
+export type AgentTextGenerator = (params: {
+  model: string;
+  system: string;
+  messages: ModelMessage[];
+  tools: ToolSet;
+}) => Promise<{
+  text: string;
+  toolCalls: AgentToolCall[];
+  usage?: LanguageModelUsage;
+}>;
 
-type GeminiAgentOptions = {
+type AiSdkAgentOptions = {
   registry: McpRegistry;
   policyEngine?: PolicyEngine;
   model?: string;
-  apiKey?: string;
-  generateContent?: GeminiContentGenerator;
+  generate?: AgentTextGenerator;
   maxToolIterations?: number;
 };
 
-export class GeminiAgent {
+export class AiSdkAgent {
   private readonly registry: McpRegistry;
   private readonly policyEngine: PolicyEngine;
   private readonly model: string;
-  private readonly generateContent: GeminiContentGenerator;
+  private readonly generate: AgentTextGenerator;
   private readonly maxToolIterations: number;
 
-  constructor(options: GeminiAgentOptions) {
+  constructor(options: AiSdkAgentOptions) {
     this.registry = options.registry;
     this.policyEngine = options.policyEngine ?? new PolicyEngine();
-    this.model = options.model ?? process.env.GEMINI_MODEL ?? DEFAULT_MODEL;
+    this.model = options.model ?? process.env.AI_GATEWAY_MODEL ?? DEFAULT_MODEL;
     this.maxToolIterations =
       options.maxToolIterations ?? DEFAULT_MAX_TOOL_ITERATIONS;
 
-    if (options.generateContent) {
-      this.generateContent = options.generateContent;
-      return;
+    if (!options.generate && !process.env.AI_GATEWAY_API_KEY && !process.env.VERCEL_OIDC_TOKEN) {
+      throw new Error("AI_GATEWAY_API_KEY is required to run AiSdkAgent");
     }
 
-    const apiKey = options.apiKey ?? process.env.GEMINI_API_KEY;
+    this.generate =
+      options.generate ??
+      (async (params) => {
+        const result = await generateText(params);
 
-    if (!apiKey) {
-      throw new Error("GEMINI_API_KEY is required to run GeminiAgent");
-    }
-
-    const ai = new GoogleGenAI({ apiKey });
-    this.generateContent = (params) => ai.models.generateContent(params);
+        return {
+          text: result.text,
+          toolCalls: result.toolCalls.map((call) => ({
+            toolCallId: call.toolCallId,
+            toolName: call.toolName,
+            input: asArgs(call.input),
+          })),
+          usage: result.usage,
+        };
+      });
   }
 
   async run(input: AgentRunInput): Promise<AgentRunResult> {
-    const contents: Content[] = [
+    const contents: ModelMessage[] = [
       ...(input.history ?? []),
-      {
-        role: "user",
-        parts: [{ text: input.userMessage }],
-      },
+      { role: "user", content: input.userMessage },
     ];
 
     return this.continueLoop(input, contents);
@@ -149,7 +163,7 @@ export class GeminiAgent {
         serverName: input.approvedResult.serverName,
         toolName: input.approvedResult.toolName,
         normalizedFunctionName: input.approvedResult.normalizedName,
-        args: input.functionCall.args ?? {},
+        args: input.functionCall.input,
         userMessage: input.userMessage,
         riskTags: [],
         createdAt: new Date().toISOString(),
@@ -158,81 +172,61 @@ export class GeminiAgent {
       result: input.approvedResult,
     });
 
-    contents.push({
-      role: "user",
-      parts: [
-        functionResponsePart(input.functionCall, {
-          output: input.approvedResult.result,
-          decision: input.decision,
-          approved: true,
-          approvalStatus: "APPROVED",
-          instruction:
-            "Human approval was granted. The MCP tool has already executed. Summarize the result for the user.",
-        }),
-      ],
-    });
+    contents.push(toolResultMessage(input.functionCall, {
+      output: input.approvedResult.result,
+      decision: input.decision,
+      approved: true,
+      approvalStatus: "APPROVED",
+      instruction:
+        "Human approval was granted. The MCP tool has already executed. Summarize the result for the user.",
+    }));
 
     return this.continueLoop(input, contents, toolEvents);
   }
 
   private async continueLoop(
     input: AgentRunInput | AgentResumeInput,
-    contents: Content[],
+    contents: ModelMessage[],
     toolEvents: AgentToolEvent[] = [],
   ): Promise<AgentRunResult> {
-    let tokenUsage: GenerateContentResponseUsageMetadata | undefined;
+    let tokenUsage: LanguageModelUsage | undefined;
 
     for (let iteration = 0; iteration < this.maxToolIterations; iteration += 1) {
-      const response = await this.generateContent({
+      const response = await this.generate({
         model: this.model,
-        contents,
-        config: {
-          systemInstruction: SYSTEM_INSTRUCTION,
-          tools: [
-            {
-              functionDeclarations: toGeminiFunctionDeclarations(
-                this.registry.getTools(),
-              ),
-            },
-          ],
-          toolConfig: {
-            functionCallingConfig: {
-              mode: FunctionCallingConfigMode.AUTO,
-            },
-          },
-        },
+        system: SYSTEM_INSTRUCTION,
+        messages: contents,
+        tools: toAiSdkTools(this.registry.getTools()),
       });
 
-      tokenUsage = response.usageMetadata ?? tokenUsage;
+      tokenUsage = addUsage(tokenUsage, response.usage);
 
-      const functionCalls = response.functionCalls ?? [];
-
-      if (functionCalls.length === 0) {
-        appendModelText(contents, response.text ?? "");
+      if (response.toolCalls.length === 0) {
+        contents.push({ role: "assistant", content: response.text });
 
         return {
           conversationId: input.conversationId,
           status: "completed",
-          finalResponse: response.text ?? "",
+          finalResponse: response.text,
           contents,
           toolEvents,
           tokenUsage,
         };
       }
 
-      appendModelFunctionCalls(contents, functionCalls);
+      contents.push({
+        role: "assistant",
+        content: response.toolCalls.map(toolCallPart),
+      });
 
-      for (const functionCall of functionCalls) {
+      for (const functionCall of response.toolCalls) {
         const toolResponse = await this.handleFunctionCall(
           input,
           functionCall,
           toolEvents,
         );
 
-        contents.push({
-          role: "user",
-          parts: [toolResponse],
-        });
+        contents.push(toolResultMessage(functionCall, toolResponse));
 
         const latestEvent = toolEvents.at(-1);
 
@@ -262,34 +256,21 @@ export class GeminiAgent {
 
   private async handleFunctionCall(
     input: AgentRunInput,
-    functionCall: FunctionCall,
+    functionCall: AgentToolCall,
     toolEvents: AgentToolEvent[],
-  ): Promise<Part> {
-    if (!functionCall.name) {
-      toolEvents.push({
-        kind: "error",
-        error: "Gemini requested a function call without a name",
-      });
-
-      return functionResponsePart(functionCall, {
-        error: "Function call missing name",
-      });
-    }
-
-    const route = this.registry.getRoute(functionCall.name);
+  ): Promise<Record<string, unknown>> {
+    const route = this.registry.getRoute(functionCall.toolName);
 
     if (!route) {
       toolEvents.push({
         kind: "error",
-        error: `Gemini requested an undiscovered tool: ${functionCall.name}`,
+        error: `The model requested an undiscovered tool: ${functionCall.toolName}`,
       });
 
-      return functionResponsePart(functionCall, {
-        error: `Unknown tool: ${functionCall.name}`,
-      });
+      return { error: `Unknown tool: ${functionCall.toolName}` };
     }
 
-    const args = functionCall.args ?? {};
+    const args = functionCall.input;
     const intent = normalizeToolIntent({
       conversationId: input.conversationId,
       userMessage: input.userMessage,
@@ -306,82 +287,109 @@ export class GeminiAgent {
 
     if (decision.outcome === "BLOCK") {
       toolEvents.push({ kind: "blocked", intent, decision });
-
-      return functionResponsePart(functionCall, {
-        error: "Blocked by external policy engine",
-        decision,
-      });
+      return { error: "Blocked by external policy engine", decision };
     }
 
     if (decision.outcome === "REQUIRE_APPROVAL") {
-      toolEvents.push({ kind: "approval_required", intent, decision });
-
-      return functionResponsePart(functionCall, {
-        error: "Human approval required before execution",
-        decision,
-      });
+      toolEvents.push({ kind: "approval_required", intent, decision, functionCall });
+      return { error: "Human approval required before execution", decision };
     }
 
     try {
-      const result = await this.registry.callTool(functionCall.name, args);
+      const result = await this.registry.callTool(functionCall.toolName, args);
       toolEvents.push({ kind: "allowed", intent, decision, result });
-
-      return functionResponsePart(functionCall, {
-        output: result.result,
-        decision,
-      });
+      return { output: result.result, decision };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       toolEvents.push({ kind: "error", intent, error: message });
-
-      return functionResponsePart(functionCall, {
-        error: message,
-        decision,
-      });
+      return { error: message, decision };
     }
   }
 }
 
-function appendModelText(contents: Content[], text: string) {
-  contents.push({
-    role: "model",
-    parts: [{ text }],
-  });
+function asArgs(input: unknown): Record<string, unknown> {
+  return input && typeof input === "object" && !Array.isArray(input)
+    ? (input as Record<string, unknown>)
+    : {};
 }
 
-function appendModelFunctionCalls(
-  contents: Content[],
-  functionCalls: FunctionCall[],
-) {
-  contents.push({
-    role: "model",
-    parts: functionCalls.map((functionCall) => ({ functionCall })),
-  });
-}
-
-function functionResponsePart(
-  functionCall: FunctionCall,
-  response: Record<string, unknown>,
-): Part {
+function toolCallPart(functionCall: AgentToolCall): ToolCallPart {
   return {
-    functionResponse: {
-      id: functionCall.id,
-      name: functionCall.name,
-      response,
-    },
+    type: "tool-call",
+    toolCallId: functionCall.toolCallId,
+    toolName: functionCall.toolName,
+    input: functionCall.input,
   };
 }
 
-function withoutPendingApprovalResponse(contents: Content[]) {
-  const copied = [...contents];
-  const last = copied.at(-1);
+function toolResultMessage(
+  functionCall: AgentToolCall,
+  response: Record<string, unknown>,
+): ModelMessage {
+  const part: ToolResultPart = {
+    type: "tool-result",
+    toolCallId: functionCall.toolCallId,
+    toolName: functionCall.toolName,
+    output: { type: "json", value: response as never },
+  };
 
-  if (
-    last?.role === "user" &&
-    last.parts?.some((part) => part.functionResponse)
-  ) {
+  return { role: "tool", content: [part] };
+}
+
+function withoutPendingApprovalResponse(contents: ModelMessage[]) {
+  const copied = [...contents];
+
+  if (copied.at(-1)?.role === "tool") {
     copied.pop();
   }
 
   return copied;
+}
+
+function addUsage(
+  total: LanguageModelUsage | undefined,
+  next: LanguageModelUsage | undefined,
+): LanguageModelUsage | undefined {
+  if (!next) {
+    return total;
+  }
+
+  if (!total) {
+    return next;
+  }
+
+  return {
+    inputTokens: addOptional(total.inputTokens, next.inputTokens),
+    inputTokenDetails: {
+      noCacheTokens: addOptional(
+        total.inputTokenDetails.noCacheTokens,
+        next.inputTokenDetails.noCacheTokens,
+      ),
+      cacheReadTokens: addOptional(
+        total.inputTokenDetails.cacheReadTokens,
+        next.inputTokenDetails.cacheReadTokens,
+      ),
+      cacheWriteTokens: addOptional(
+        total.inputTokenDetails.cacheWriteTokens,
+        next.inputTokenDetails.cacheWriteTokens,
+      ),
+    },
+    outputTokens: addOptional(total.outputTokens, next.outputTokens),
+    outputTokenDetails: {
+      textTokens: addOptional(
+        total.outputTokenDetails.textTokens,
+        next.outputTokenDetails.textTokens,
+      ),
+      reasoningTokens: addOptional(
+        total.outputTokenDetails.reasoningTokens,
+        next.outputTokenDetails.reasoningTokens,
+      ),
+    },
+    totalTokens: addOptional(total.totalTokens, next.totalTokens),
+    raw: undefined,
+  };
+}
+
+function addOptional(left: number | undefined, right: number | undefined) {
+  return left === undefined && right === undefined ? undefined : (left ?? 0) + (right ?? 0);
 }

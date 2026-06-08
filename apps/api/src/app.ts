@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
-import { GeminiAgent } from "./agent";
+import { AiSdkAgent, type AgentToolCall } from "./agent";
 import { McpRegistry } from "./mcp";
 import {
   approveRequest,
@@ -161,14 +161,16 @@ export async function createApiApp() {
         return;
       }
 
-      if (!process.env.GEMINI_API_KEY) {
+      if (!hasGatewayCredentials()) {
         response.status(503).json({
-          error: "GEMINI_API_KEY is required to resume the approved agent run",
+          error: "AI_GATEWAY_API_KEY is required to resume the approved agent run",
         });
         return;
       }
 
-      const functionCall = approval.geminiFunctionCallJson as any;
+      const functionCall = normalizeSavedToolCall(
+        approval.toolCallJson,
+      );
       const intent = approval.intentJson as any;
       const decision = approval.decisionJson as any;
       const contents = Array.isArray(approval.agentContentsJson)
@@ -183,11 +185,11 @@ export async function createApiApp() {
       }
 
       const result = await registry.callTool(
-        functionCall.name,
-        functionCall.args ?? {},
+        functionCall.toolName,
+        functionCall.input,
       );
       const updated = await approveRequest(approval.id, result);
-      const agent = new GeminiAgent({ registry });
+      const agent = new AiSdkAgent({ registry });
       const resumed = await agent.resumeAfterApproval({
         conversationId: approval.conversationId,
         userMessage: intent.userMessage ?? "Resumed after human approval",
@@ -244,16 +246,16 @@ export async function createApiApp() {
       return;
     }
 
-    if (!process.env.GEMINI_API_KEY) {
+    if (!hasGatewayCredentials()) {
       response.status(503).json({
-        error: "GEMINI_API_KEY is required for live chat",
+        error: "AI_GATEWAY_API_KEY is required for live chat",
       });
       return;
     }
 
     try {
       const conversationId = request.body?.conversationId ?? crypto.randomUUID();
-      const agent = new GeminiAgent({ registry });
+      const agent = new AiSdkAgent({ registry });
       const result = await agent.run({
         conversationId,
         userMessage: message,
@@ -316,30 +318,50 @@ function sendAgentError(response: express.Response, error: unknown) {
   response.status(normalized.status).json(normalized.body);
 }
 
-function normalizeAgentError(error: unknown) {
+export function normalizeAgentError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   const retryAfterSeconds = retryDelaySeconds(message);
 
-  if (message.includes('"code":429') || message.includes("RESOURCE_EXHAUSTED")) {
+  if (
+    message.includes("requires a valid credit card") ||
+    message.includes("add a card and unlock your free credits")
+  ) {
     return {
-      status: 429,
+      status: 402,
       body: {
-        error: retryAfterSeconds
-          ? `Gemini quota exceeded. Please retry in about ${retryAfterSeconds} seconds.`
-          : "Gemini quota exceeded. Please retry later.",
-        code: "GEMINI_RATE_LIMITED",
-        retryAfterSeconds,
+        error:
+          "AI Gateway requires a valid credit card on file before it can use free credits.",
+        code: "AI_GATEWAY_BILLING_REQUIRED",
+        detail: message,
       },
     };
   }
 
-  if (message.includes('"code":404') && message.includes("models/")) {
+  if (
+    message.includes('"code":429') ||
+    message.includes("Too Many Requests") ||
+    message.includes("Free tier requests on this model are rate-limited")
+  ) {
+    return {
+      status: 429,
+      body: {
+        error: retryAfterSeconds
+          ? `AI Gateway quota exceeded. Please retry in about ${retryAfterSeconds} seconds.`
+          : "AI Gateway free-tier requests for this model are rate-limited. Retry later, top up paid credits, or switch AI_GATEWAY_MODEL.",
+        code: "AI_GATEWAY_RATE_LIMITED",
+        retryAfterSeconds,
+        detail: message,
+      },
+    };
+  }
+
+  if (message.includes('"code":404') || message.includes("model_not_found")) {
     return {
       status: 502,
       body: {
         error:
-          "Configured Gemini model is not available for generateContent. Set GEMINI_MODEL to an available model, for example gemini-2.5-flash.",
-        code: "GEMINI_MODEL_NOT_FOUND",
+          "Configured AI Gateway model is not available. Set AI_GATEWAY_MODEL to a supported provider/model ID.",
+        code: "AI_GATEWAY_MODEL_NOT_FOUND",
       },
     };
   }
@@ -360,4 +382,18 @@ function retryDelaySeconds(message: string) {
   const seconds = retryInfoMatch?.[1] ?? textMatch?.[1];
 
   return seconds ? Math.ceil(Number(seconds)) : undefined;
+}
+
+function hasGatewayCredentials() {
+  return Boolean(process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN);
+}
+
+function normalizeSavedToolCall(value: unknown): AgentToolCall {
+  const call = value as Record<string, unknown>;
+
+  return {
+    toolCallId: String(call.toolCallId ?? call.id ?? crypto.randomUUID()),
+    toolName: String(call.toolName ?? call.name ?? ""),
+    input: (call.input ?? call.args ?? {}) as Record<string, unknown>,
+  };
 }

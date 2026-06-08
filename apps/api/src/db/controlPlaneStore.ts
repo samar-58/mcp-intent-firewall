@@ -155,10 +155,7 @@ export async function saveAgentRun(params: {
         data: {
           conversationId: params.conversationId,
           intentJson: jsonValue(event.intent),
-          geminiFunctionCallJson: jsonValue({
-            name: event.intent.normalizedFunctionName,
-            args: event.intent.args,
-          }),
+          toolCallJson: jsonValue(event.functionCall),
           agentContentsJson: jsonValue(params.result.contents),
           decisionJson: jsonValue(event.decision),
         },

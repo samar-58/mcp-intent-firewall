@@ -1,28 +1,29 @@
-import type {
-  DiscoveredMcpTool,
-  JsonValue,
-} from "@mcp-intent-firewall/shared";
-import type { FunctionDeclaration } from "@google/genai";
+import type { DiscoveredMcpTool } from "@mcp-intent-firewall/shared";
+import { dynamicTool, jsonSchema, type ToolSet } from "ai";
 
 const EMPTY_OBJECT_SCHEMA = {
   type: "object",
   properties: {},
+  additionalProperties: false,
 };
 
-export function toGeminiFunctionDeclarations(
-  tools: DiscoveredMcpTool[],
-): FunctionDeclaration[] {
-  return tools.map((tool) => ({
-    name: tool.normalizedName,
-    description: tool.description ?? tool.title ?? `MCP tool ${tool.toolName}`,
-    parametersJsonSchema: normalizeJsonSchema(tool.inputSchema),
-  }));
+export function toAiSdkTools(tools: DiscoveredMcpTool[]): ToolSet {
+  return Object.fromEntries(
+    tools.map((tool) => [
+      tool.normalizedName,
+      dynamicTool({
+        description:
+          tool.description ?? tool.title ?? `MCP tool ${tool.toolName}`,
+        inputSchema: jsonSchema(normalizeJsonSchema(tool.inputSchema)),
+      } as Parameters<typeof dynamicTool>[0]),
+    ]),
+  );
 }
 
-function normalizeJsonSchema(schema: unknown): JsonValue {
+function normalizeJsonSchema(schema: unknown) {
   if (!schema || typeof schema !== "object") {
     return EMPTY_OBJECT_SCHEMA;
   }
 
-  return schema as JsonValue;
+  return schema as Parameters<typeof jsonSchema>[0];
 }

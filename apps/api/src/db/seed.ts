@@ -55,6 +55,19 @@ const policyRules: PolicyRuleDefinition[] = [
     },
     priority: 6,
   },
+  {
+    id: "rule_validate_incident_id_prefix",
+    name: "Validate incident ids must use inc_ prefix",
+    enabled: true,
+    effect: "VALIDATE",
+    scope: { toolName: "get_incident" },
+    condition: {
+      kind: "argStringStartsWith",
+      path: "incidentId",
+      prefix: "inc_",
+    },
+    priority: 7,
+  },
 ];
 
 await prisma.mcpServerConfig.upsert({

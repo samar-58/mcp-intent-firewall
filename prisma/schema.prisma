@@ -92,7 +92,7 @@ model ApprovalRequest {
   status                 ApprovalStatus @default(PENDING)
   conversationId         String
   intentJson             Json
-  geminiFunctionCallJson Json
+  toolCallJson           Json
   agentContentsJson      Json?
   decisionJson           Json?
   resultJson             Json?

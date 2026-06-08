@@ -38,7 +38,17 @@ export type Conversation = {
   id: string;
   updatedAt: string;
   messages: Array<{ role: string; contentJson: { text?: string } }>;
-  agentRuns?: Array<{ tokenUsageJson?: { totalTokenCount?: number } }>;
+  agentRuns?: Array<{ tokenUsageJson?: TokenUsage }>;
+};
+
+export type TokenUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  // Supports logs created before the AI SDK provider migration.
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  totalTokenCount?: number;
 };
 
 export type Approval = {

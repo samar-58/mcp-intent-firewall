@@ -1,8 +1,9 @@
-export { GeminiAgent } from "./geminiAgent";
-export { toGeminiFunctionDeclarations } from "./toolSchemaAdapter";
+export { AiSdkAgent } from "./aiSdkAgent";
+export { toAiSdkTools } from "./toolSchemaAdapter";
 export type {
   AgentRunInput,
   AgentRunResult,
+  AgentTextGenerator,
+  AgentToolCall,
   AgentToolEvent,
-  GeminiContentGenerator,
-} from "./geminiAgent";
+} from "./aiSdkAgent";

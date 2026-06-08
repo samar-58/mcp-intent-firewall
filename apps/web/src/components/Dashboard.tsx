@@ -1,4 +1,6 @@
+import { useMemo } from "react";
 import type { McpTool, McpHealth, Policy, ToolLog, Approval, Conversation } from "./shared/types";
+import { renderMarkdown } from "../utils/markdown";
 import {
   Metric,
   FlowStep,
@@ -17,7 +19,7 @@ import {
   toneForOutcome,
   prettyJson,
 } from "./shared";
-import { promptPresets } from "../hooks/useFirewallData";
+import { promptPresets, totalTokens } from "../hooks/useFirewallData";
 
 export function Dashboard(props: {
   readyServers: number;
@@ -88,11 +90,14 @@ export function Dashboard(props: {
             {promptPresets.map((preset) => (
               <button
                 className="preset-btn"
-                key={preset}
-                onClick={() => props.onChoosePrompt(preset)}
+                key={preset.label}
+                onClick={() => props.onChoosePrompt(preset.prompt)}
               >
                 <IconZap />
-                <span>{preset}</span>
+                <span>
+                  <strong>{preset.label}</strong>
+                  <small>{preset.prompt}</small>
+                </span>
               </button>
             ))}
           </div>
@@ -118,8 +123,9 @@ export function Dashboard(props: {
               {props.latestConversation && (
                 <span className="agent-meta">
                   Last run:{" "}
-                  {props.latestConversation.agentRuns?.[0]?.tokenUsageJson
-                    ?.totalTokenCount ?? 0}{" "}
+                  {totalTokens(
+                    props.latestConversation.agentRuns?.[0]?.tokenUsageJson,
+                  )}{" "}
                   tokens
                 </span>
               )}
@@ -127,10 +133,7 @@ export function Dashboard(props: {
           </div>
 
           {props.visibleResponse && (
-            <div className="response-bubble">
-              <span className="response-bubble__label">Assistant response</span>
-              <p>{props.visibleResponse}</p>
-            </div>
+            <ResponseBubble content={props.visibleResponse} />
           )}
 
           <div className="flow-strip">
@@ -225,6 +228,20 @@ export function Dashboard(props: {
           )}
         </section>
       </div>
+    </div>
+  );
+}
+
+function ResponseBubble({ content }: { content: string }) {
+  const html = useMemo(() => renderMarkdown(content), [content]);
+
+  return (
+    <div className="response-bubble">
+      <span className="response-bubble__label">Assistant response</span>
+      <div
+        className="response-bubble__content md-content"
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
     </div>
   );
 }

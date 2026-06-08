@@ -1,5 +1,6 @@
 import type { Conversation } from "./shared/types";
 import { EmptyState, IconHistory } from "./shared";
+import { totalTokens } from "../hooks/useFirewallData";
 
 export function Conversations(props: { conversations: Conversation[] }) {
   return (
@@ -29,7 +30,7 @@ export function Conversations(props: { conversations: Conversation[] }) {
                 <div className="conversation-card__meta">
                   <span>{new Date(conversation.updatedAt).toLocaleString()}</span>
                   <span className="conversation-card__tokens">
-                    {conversation.agentRuns?.[0]?.tokenUsageJson?.totalTokenCount ?? 0} tokens
+                    {totalTokens(conversation.agentRuns?.[0]?.tokenUsageJson)} tokens
                   </span>
                 </div>
               </article>
